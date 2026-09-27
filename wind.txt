@@ -1,0 +1,108 @@
+// ======================================
+// CHILIKA CYCLONE WIND DATASET
+// Same 81-Row Structure
+// ======================================
+
+var chilika = ee.Geometry.Rectangle([84.9, 19.1, 85.8, 20.0]);
+Map.centerObject(chilika, 9);
+
+// --------------------------------------
+// 1. ERA5 WIND DATASET
+// --------------------------------------
+var era5 = ee.ImageCollection("ECMWF/ERA5_LAND/HOURLY")
+  .filterBounds(chilika);
+
+// --------------------------------------
+// 2. FUNCTION: WIND CALCULATION
+// --------------------------------------
+function getWindData(start, end) {
+  
+  var era = era5.filterDate(start, end);
+  
+  var wind = era.select([
+    'u_component_of_wind_10m',
+    'v_component_of_wind_10m'
+  ]).mean();
+  
+  var u = wind.select('u_component_of_wind_10m');
+  var v = wind.select('v_component_of_wind_10m');
+  
+  // Wind Speed = sqrt(u² + v²)
+  var windSpeed = u.pow(2).add(v.pow(2)).sqrt().rename('WindSpeed');
+  
+  // Wind Direction (radians)
+  var windDir = v.atan2(u).rename('WindDir');
+  
+  return windSpeed.addBands(windDir);
+}
+
+// --------------------------------------
+// 3. CYCLONES & WINDOWS (UNCHANGED)
+// --------------------------------------
+var cyclones = [
+  {name:'Phailin', date:'2013-10-12', enso:'ElNino'},
+  {name:'Hudhud', date:'2014-10-12', enso:'ElNino'},
+  {name:'Fani', date:'2019-05-03', enso:'ElNino'},
+  {name:'Titli', date:'2018-10-11', enso:'LaNina'},
+  {name:'Yaas', date:'2021-05-26', enso:'LaNina'},
+  {name:'Amphan', date:'2020-05-20', enso:'LaNina'},
+  {name:'Vardah', date:'2016-12-12', enso:'Neutral'},
+  {name:'Helen', date:'2013-11-22', enso:'Neutral'},
+  {name:'Gulab', date:'2021-09-26', enso:'Neutral'}
+];
+
+var windows = [
+  {phase:'pre2', start:-14, end:-7}, {phase:'pre1', start:-7, end:0},
+  {phase:'during', start:0, end:7}, {phase:'rec1', start:7, end:14},
+  {phase:'rec2', start:14, end:21}, {phase:'rec3', start:21, end:28},
+  {phase:'rec4', start:28, end:35}, {phase:'rec5', start:35, end:42},
+  {phase:'rec6', start:42, end:49}
+];
+
+// --------------------------------------
+// 4. EXTRACTION
+// --------------------------------------
+var features = cyclones.map(function(c) {
+  var d = ee.Date(c.date);
+  
+  return windows.map(function(w) {
+    
+    var start = d.advance(w.start, 'day');
+    var end = d.advance(w.end, 'day');
+    
+    // Get wind data
+    var windImg = getWindData(start, end);
+    
+    var windStats = windImg.reduceRegion({
+      reducer: ee.Reducer.mean(),
+      geometry: chilika,
+      scale: 1000,
+      maxPixels: 1e13
+    });
+
+    return ee.Feature(null, {
+      'Cyclone': c.name,
+      'Phase': w.phase,
+      'Date_Start': start.format('YYYY-MM-dd'),
+      'ENSO': c.enso,
+
+      // FINAL VARIABLES
+      'WindSpeed': windStats.get('WindSpeed'),
+      'WindDirection': windStats.get('WindDir')
+    });
+    
+  });
+});
+
+var table = ee.FeatureCollection(ee.List(features).flatten());
+
+// --------------------------------------
+// 5. EXPORT
+// --------------------------------------
+Export.table.toDrive({
+  collection: table,
+  description: 'Chilika_Wind_81_Rows',
+  fileFormat: 'CSV'
+});
+
+print('Wind dataset ready. Check Tasks tab.', table.limit(5));
